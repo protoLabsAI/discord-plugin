@@ -1,0 +1,25 @@
+[project]
+name = "discord-plugin"
+version = "0.1.0"   # keep in lockstep with protoagent.plugin.yaml (test_manifest enforces it)
+description = "Discord ingress + outbound tools — a standalone protoAgent plugin"
+requires-python = ">=3.11"
+
+# Mirrors protoAgent's ruff config so the ported source lints clean (it was written
+# under these rules). Style rules the codebase intentionally uses are ignored, not
+# churned. `ruff format` is NOT run over the ported source yet — CI format-checks
+# only tests/ (see .github/workflows/ci.yml) until a dedicated format pass.
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E402", "E501", "E702", "E731", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]

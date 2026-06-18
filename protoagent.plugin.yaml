@@ -1,0 +1,28 @@
+id: discord
+name: Discord
+version: 0.1.0
+description: >-
+  Inbound Discord DM/@-mention gateway + outbound tools (ADR 0015/0016). A
+  standalone protoAgent plugin (ADR 0018/0019) — install it from this repo and
+  enable it; it's not bundled with the host. Off until a bot token is set in
+  System → Settings → Discord. Disable with `plugins: { disabled: [discord] }`.
+enabled: false                 # ships disabled — enabling is the operator's trust decision
+repository: https://github.com/protoLabsAI/discord-plugin
+min_protoagent_version: "0.34.0"
+requires_env: []
+# Config section (ADR 0019) — claims the top-level `discord` section, so the
+# existing Settings group keeps working unchanged when installed.
+config_section: discord
+config:
+  enabled: false
+  admin_ids: []
+secrets: [bot_token]
+settings:
+  - { key: enabled, label: "Enable Discord", type: bool, description: "Inbound DM gateway. Needs the bot token below; reconnects live on save." }
+  - { key: bot_token, label: "Bot token", type: secret, description: "Discord bot token (Developer Portal → your app → Bot → Reset Token). Use “Test connection” to verify before saving." }
+  - { key: admin_ids, label: "Admin user IDs", type: string_list, description: "Discord user IDs allowed to DM the bot (one per line). Empty = anyone." }
+# Declarative transparency (shown in the console; not yet enforced). httpx +
+# websockets are core host deps, so no requires_pip.
+capabilities:
+  network: ["discord.com", "*.discord.gg"]   # REST v10 + the gateway websocket
+  filesystem: scoped                          # turn-log sqlite + return-address file in the scoped config dir

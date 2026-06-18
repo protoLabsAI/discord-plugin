@@ -1,0 +1,27 @@
+name: CI
+
+# Lint + test the plugin on the org's Namespace Linux profile (override via the
+# NSC_RUNNER repo var; falls back to a hosted runner on a fork that lacks it).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ vars.NSC_RUNNER || 'namespace-profile-protolabs-linux' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev deps
+        run: pip install -r requirements-dev.txt ruff
+      - name: Lint
+        # The ported Discord source isn't ruff-format'd yet (it follows protoAgent's
+        # check-only style), so format-check is scoped to tests/ until a cleanup pass.
+        run: ruff check . && ruff format --check tests
+      - name: Test
+        run: pytest -q
