@@ -21,7 +21,7 @@ def test_route_reports_success(monkeypatch, registry):
     monkeypatch.setattr(gw, "validate_token", fake_validate)
     r = _client(registry).post("/api/config/test-discord", json={"bot_token": "abc"})
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "error": "", "bot_user": "mybot"}
+    assert r.json() == {"ok": True, "error": "", "identity": "mybot"}
 
 
 def test_route_reports_failure(monkeypatch, registry):
@@ -30,4 +30,4 @@ def test_route_reports_failure(monkeypatch, registry):
 
     monkeypatch.setattr(gw, "validate_token", fake_validate)
     r = _client(registry).post("/api/config/test-discord", json={"bot_token": "bad"})
-    assert r.json() == {"ok": False, "error": "invalid bot token", "bot_user": None}
+    assert r.json() == {"ok": False, "error": "invalid bot token", "identity": None}
