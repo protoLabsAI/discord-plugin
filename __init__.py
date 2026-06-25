@@ -117,6 +117,16 @@ def register(registry) -> None:
     registry.register_surface(_start, stop=_teardown, reload=_reload, name="discord-gateway")
     registry.register_router(_build_router(registry), prefix="")  # existing /api path
 
+    # Console view (ADR 0026): public page + gated data routes.
+    try:
+        from .view import build_view_routers
+
+        _page, _data = build_view_routers(registry)
+        registry.register_router(_page)  # default prefix /plugins/discord (public via public_paths)
+        registry.register_router(_data, prefix="/api/plugins/discord")
+    except Exception:  # noqa: BLE001 — view is best-effort
+        log.exception("[discord] mounting view router failed")
+
     # Outbound tools — only when a token is set (off by default, as before). Seed
     # the client from the resolved config first so a UI-set token (not just the
     # DISCORD_BOT_TOKEN env) surfaces the tools at graph build.

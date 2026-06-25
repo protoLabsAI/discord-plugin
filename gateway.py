@@ -63,6 +63,14 @@ def _f(env: str, default: float) -> float:
 _cfg_token: str | None = None
 _cfg_admin_ids: set[str] | None = None
 
+# Live gateway state for the console view (best-effort; not load-bearing).
+_status: dict = {"connected": False, "ready": False, "guilds": 0}
+
+
+def gateway_status() -> dict:
+    """Snapshot of the live gateway connection (for the Discord console view)."""
+    return dict(_status)
+
 
 def configure(token: str | None, admin_ids: list[str] | None) -> None:
     """Set the in-app Discord config (call before ``start_in_background``).
@@ -502,6 +510,7 @@ async def _run_gateway() -> None:
         try:
             async with websockets.connect(f"{gateway_url}?v=10&encoding=json") as ws:
                 log.info("[discord] gateway connected")
+                _status["connected"] = True
                 async for raw in ws:
                     data = json.loads(raw)
                     op = data.get("op")
@@ -527,6 +536,8 @@ async def _run_gateway() -> None:
                         t = data.get("t")
                         d = data.get("d") or {}
                         if t == "READY":
+                            _status["ready"] = True
+                            _status["guilds"] = len(d.get("guilds", []))
                             log.info("[discord] gateway READY (%d guilds)", len(d.get("guilds", [])))
                         elif t == "MESSAGE_CREATE":
                             try:
@@ -576,3 +587,4 @@ async def stop() -> None:
             pass
         _delivery_task = None
     await _conversations.stop()
+    _status.update(connected=False, ready=False, guilds=0)

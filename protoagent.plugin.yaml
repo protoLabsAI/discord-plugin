@@ -18,6 +18,14 @@ config_section: discord
 # Discord-specific frontend (ADR 0059).
 test: true
 guide_url: "https://protolabsai.github.io/protoAgent/guides/discord#bot-setup"
+# Console view (ADR 0026) — connection/bot status dashboard. The page is public
+# (browser iframe can't carry a bearer); data is fetched from the gated
+# /api/plugins/discord/* routes. public_paths needs a host with the plugin
+# auth-exempt-paths feature; on older hosts the view simply 401s under a bearer.
+views:
+  - { id: discord, label: Discord, icon: MessageCircle, path: /plugins/discord/view, placement: right }
+public_paths:
+  - /plugins/discord/view
 config:
   enabled: false
   admin_ids: []
