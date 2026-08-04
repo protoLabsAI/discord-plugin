@@ -1,6 +1,6 @@
 id: discord
 name: Discord
-version: 0.2.0
+version: 0.2.1
 description: >-
   Inbound Discord DM/@-mention gateway + outbound tools (ADR 0015/0016). A
   standalone protoAgent plugin (ADR 0018/0019) — install it from this repo and
@@ -33,7 +33,7 @@ secrets: [bot_token]
 settings:
   - { key: enabled, label: "Enable Discord", type: bool, description: "Inbound DM gateway. Needs the bot token below; reconnects live on save." }
   - { key: bot_token, label: "Bot token", type: secret, description: "Discord bot token (Developer Portal → your app → Bot → Reset Token). Use “Test connection” to verify before saving." }
-  - { key: admin_ids, label: "Admin user IDs", type: string_list, description: "Discord user IDs allowed to DM the bot (one per line). Empty = anyone." }
+  - { key: admin_ids, label: "Admin user IDs", type: string_list, description: "Discord user IDs allowed to DM the bot (one per line). Empty = anyone. Also tells the agent who its operator is, so it can DM you without asking for your ID." }
 # Declarative transparency (shown in the console; not yet enforced). httpx +
 # websockets are core host deps, so no requires_pip.
 capabilities:
