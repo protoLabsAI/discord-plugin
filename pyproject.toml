@@ -1,6 +1,6 @@
 [project]
 name = "discord-plugin"
-version = "0.1.1"   # keep in lockstep with protoagent.plugin.yaml (test_manifest enforces it)
+version = "0.1.2"   # keep in lockstep with protoagent.plugin.yaml (test_manifest enforces it)
 description = "Discord ingress + outbound tools — a standalone protoAgent plugin"
 requires-python = ">=3.11"
 

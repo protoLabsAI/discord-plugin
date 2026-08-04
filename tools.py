@@ -2,9 +2,16 @@
 
 Talks to Discord's REST API **v10** directly via ``httpx`` (already a core dep) —
 no ``discord.py``. Three tools: ``discord_send`` / ``discord_read`` /
-``discord_react``. They're **off unless ``DISCORD_BOT_TOKEN`` is set**: when the
-token is absent the tools are not registered (``get_all_tools`` gates on
+``discord_react``. They're **off unless a bot token is configured**: when the
+token is absent the tools are not registered (``register()`` gates on
 ``discord_configured()``), and any direct call degrades to a readable error.
+
+The token comes from the in-app config (Settings → Discord, an ADR 0019
+manifest secret) via :func:`configure`, with ``DISCORD_BOT_TOKEN`` as the env
+fallback — the same two-source precedence ``gateway.configure`` uses. This
+module deliberately keeps its own copy rather than importing the gateway: it's
+the stateless half and must stay usable with no gateway connection. Keeping the
+sources in sync is ``register()``'s job (it seeds both).
 
 This is the request/response half. The persistent inbound **gateway** listener
 (DMs + @-mentions, burst debounce, reactions, threads, return-address capture)
@@ -27,20 +34,36 @@ _MAX_MESSAGE_LEN = 2000  # Discord hard limit
 _USER_AGENT = "protoAgent (https://github.com/protoLabsAI/protoAgent, 0.1)"
 
 
+# In-app config token (Settings → Discord). None = fall back to the env var.
+_cfg_token: str | None = None
+
+
+def configure(token: str | None) -> None:
+    """Set the in-app bot token — call before gating on :func:`discord_configured`.
+
+    Mirrors ``gateway.configure``'s contract: a blank/None token leaves
+    ``DISCORD_BOT_TOKEN`` as the source (Docker back-compat). ``register()``
+    seeds this from the resolved plugin config on load *and* on config reload,
+    so a UI-set token surfaces the tools without needing an env var.
+    """
+    global _cfg_token
+    _cfg_token = (token or "").strip() or None
+
+
 def _token() -> str | None:
-    return os.environ.get("DISCORD_BOT_TOKEN")
+    return _cfg_token or os.environ.get("DISCORD_BOT_TOKEN")
 
 
 def discord_configured() -> bool:
-    """True when a bot token is present — the gate ``get_all_tools`` uses to
-    decide whether to register these tools at all (ADR 0015: off by default)."""
+    """True when a bot token is present — the gate ``register()`` uses to decide
+    whether to register these tools at all (ADR 0015: off by default)."""
     return bool((_token() or "").strip())
 
 
 async def _request(method: str, path: str, json_body: dict[str, Any] | None = None) -> tuple[int, Any]:
     token = _token()
     if not token:
-        return 0, "Error: DISCORD_BOT_TOKEN env var is not set."
+        return 0, "Error: no Discord bot token — set one in Settings → Discord (or DISCORD_BOT_TOKEN)."
     try:
         import httpx
     except ImportError:

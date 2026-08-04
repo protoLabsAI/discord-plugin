@@ -33,7 +33,8 @@ The bot token is stored in `secrets.yaml` (never tracked YAML). `DISCORD_BOT_TOK
   admin allowlist, long-window context, and return-address delivery.
 - **Route** — `POST /api/config/test-discord` (the console's Test button).
 - **Tools** — `discord_send` / `discord_read` / `discord_react`, registered only
-  when a token is set.
+  when a token is set — from Settings → Discord *or* the `DISCORD_BOT_TOKEN` env.
+  Saving a token rebuilds the graph, so the tools appear without a restart.
 
 Config/secrets/Settings come from `protoagent.plugin.yaml` (ADR 0019). Behavior is
 identical to the former first-party `plugins/discord`.

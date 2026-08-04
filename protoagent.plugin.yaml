@@ -1,6 +1,6 @@
 id: discord
 name: Discord
-version: 0.1.1
+version: 0.1.2
 description: >-
   Inbound Discord DM/@-mention gateway + outbound tools (ADR 0015/0016). A
   standalone protoAgent plugin (ADR 0018/0019) — install it from this repo and
