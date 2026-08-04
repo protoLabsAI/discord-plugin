@@ -47,11 +47,26 @@ def _should_start(cfg: dict) -> bool:
     return (bool(cfg_token) and bool(cfg.get("enabled"))) or (not cfg_token and bool(env_token))
 
 
+def _seed(cfg: dict) -> None:
+    """Push the resolved config token at BOTH token holders.
+
+    The gateway (stateful connection) and ``tools`` (stateless REST) each keep
+    their own token, so seeding only one leaves the other on the env fallback.
+    That asymmetry was the bug: a UI-set token started the gateway but left
+    ``discord_configured()`` false, so the agent got no outbound tools at all.
+    """
+    from .gateway import configure as _gateway_configure
+    from .tools import configure as _tools_configure
+
+    _gateway_configure(cfg.get("bot_token"), cfg.get("admin_ids"))
+    _tools_configure(cfg.get("bot_token"))
+
+
 def _launch(cfg: dict, host) -> None:
     """Configure + (re)start the gateway from the given config + host services."""
-    from .gateway import configure, start_in_background
+    from .gateway import start_in_background
 
-    configure(cfg.get("bot_token"), cfg.get("admin_ids"))
+    _seed(cfg)
     if not _should_start(cfg):
         log.info(
             "[discord] gateway not started (enabled=%s, token set=%s)",
@@ -118,11 +133,12 @@ def register(registry) -> None:
     registry.register_router(_build_router(registry), prefix="")  # existing /api path
 
     # Outbound tools — only when a token is set (off by default, as before). Seed
-    # the client from the resolved config first so a UI-set token (not just the
-    # DISCORD_BOT_TOKEN env) surfaces the tools at graph build.
-    from .gateway import configure
+    # both token holders from the resolved config first so a UI-set token (not just
+    # the DISCORD_BOT_TOKEN env) surfaces the tools at graph build. The host rebuilds
+    # the graph on a Settings save, so register() re-runs and a newly-pasted token
+    # brings the tools up without a process restart.
     from .tools import discord_configured, get_discord_tools
 
-    configure(registry.config.get("bot_token"), registry.config.get("admin_ids"))
+    _seed(registry.config)
     if discord_configured():
         registry.register_tools(get_discord_tools())

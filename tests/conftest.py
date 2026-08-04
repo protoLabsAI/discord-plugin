@@ -61,6 +61,19 @@ class FakeRegistry:
         self.surfaces.append({"name": name, "start": start, "stop": stop, "reload": reload})
 
 
+@pytest.fixture(autouse=True)
+def _reset_configured_tokens():
+    """Clear the in-app token both halves cache, so a config-token test can't
+    leak a token into the next test's "no token" assertions (module globals
+    outlive a test; the env var is handled per-test by monkeypatch)."""
+    import discord.gateway as gw
+    import discord.tools as dt
+
+    yield
+    gw.configure(None, None)
+    dt.configure(None)
+
+
 @pytest.fixture
 def registry():
     return FakeRegistry()
