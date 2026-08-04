@@ -60,6 +60,20 @@ def test_config_token_reaches_the_tool_body(monkeypatch):
     assert dt._token() == "ui-set-token"
 
 
+def test_config_admin_ids_reach_the_tools(monkeypatch):
+    """`admin_ids` went only to the gateway (inbound allowlist), so the agent
+    couldn't learn its own operator's user ID from its own config."""
+    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("DISCORD_ADMIN_IDS", raising=False)
+    registry = FakeRegistry(config={"enabled": True, "bot_token": "t", "admin_ids": ["249386616806834177"]})
+
+    discord.register(registry)
+
+    from discord import tools as dt
+
+    assert dt._admin_ids() == {"249386616806834177"}
+
+
 async def test_reload_reseeds_the_tool_token(registry, monkeypatch):
     """A Settings save swaps the token; already-bound tool objects must follow it,
     not keep posting with the revoked one.

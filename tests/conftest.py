@@ -71,7 +71,7 @@ def _reset_configured_tokens():
 
     yield
     gw.configure(None, None)
-    dt.configure(None)
+    dt.configure(None, None)
 
 
 @pytest.fixture

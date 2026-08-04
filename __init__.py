@@ -48,18 +48,20 @@ def _should_start(cfg: dict) -> bool:
 
 
 def _seed(cfg: dict) -> None:
-    """Push the resolved config token at BOTH token holders.
+    """Push the resolved config at BOTH holders — same args to each.
 
     The gateway (stateful connection) and ``tools`` (stateless REST) each keep
-    their own token, so seeding only one leaves the other on the env fallback.
+    their own copy, so seeding only one leaves the other on the env fallback.
     That asymmetry was the bug: a UI-set token started the gateway but left
     ``discord_configured()`` false, so the agent got no outbound tools at all.
+    The same split hid ``admin_ids`` — the gateway used it as an inbound
+    allowlist while the agent had no way to learn its own operator's user ID.
     """
     from .gateway import configure as _gateway_configure
     from .tools import configure as _tools_configure
 
     _gateway_configure(cfg.get("bot_token"), cfg.get("admin_ids"))
-    _tools_configure(cfg.get("bot_token"))
+    _tools_configure(cfg.get("bot_token"), cfg.get("admin_ids"))
 
 
 def _launch(cfg: dict, host) -> None:

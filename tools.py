@@ -45,24 +45,42 @@ _MAX_MESSAGE_LEN = 2000  # Discord hard limit
 _USER_AGENT = "protoAgent (https://github.com/protoLabsAI/protoAgent, 0.1)"
 
 
-# In-app config token (Settings → Discord). None = fall back to the env var.
+# In-app config (Settings → Discord). None = fall back to the env var.
 _cfg_token: str | None = None
+_cfg_admin_ids: set[str] | None = None
 
 
-def configure(token: str | None) -> None:
-    """Set the in-app bot token — call before gating on :func:`discord_configured`.
+def configure(token: str | None, admin_ids: list[str] | None = None) -> None:
+    """Set the in-app bot token + admin allowlist — call before gating on
+    :func:`discord_configured`.
 
     Mirrors ``gateway.configure``'s contract: a blank/None token leaves
-    ``DISCORD_BOT_TOKEN`` as the source (Docker back-compat). ``register()``
-    seeds this from the resolved plugin config on load *and* on config reload,
-    so a UI-set token surfaces the tools without needing an env var.
+    ``DISCORD_BOT_TOKEN`` as the source (Docker back-compat); a non-None
+    ``admin_ids`` (even empty) overrides the env CSV. ``register()`` seeds this
+    from the resolved plugin config on load *and* on config reload, so a UI-set
+    token surfaces the tools without needing an env var.
+
+    ``admin_ids`` is here so ``discord_whoami`` can tell the agent who its
+    operator IS. The gateway uses the same list as an inbound allowlist, but
+    that's invisible from the outbound side — without this the agent has to ask
+    the operator for a user ID that was sitting in its own config all along.
     """
-    global _cfg_token
+    global _cfg_token, _cfg_admin_ids
     _cfg_token = (token or "").strip() or None
+    _cfg_admin_ids = {str(a).strip() for a in admin_ids if str(a).strip()} if admin_ids is not None else None
 
 
 def _token() -> str | None:
     return _cfg_token or os.environ.get("DISCORD_BOT_TOKEN")
+
+
+def _admin_ids() -> set[str]:
+    """The configured operator IDs — config first, then the ``DISCORD_ADMIN_IDS``
+    env CSV, matching ``gateway._admin_ids``. Empty means "anyone may DM"."""
+    if _cfg_admin_ids is not None:
+        return _cfg_admin_ids
+    raw = os.environ.get("DISCORD_ADMIN_IDS", "").strip()
+    return {s.strip() for s in raw.split(",") if s.strip()} if raw else set()
 
 
 def discord_configured() -> bool:
@@ -249,11 +267,12 @@ _CHANNEL_TYPES = {0: "text", 2: "voice", 4: "category", 5: "announcement", 13: "
 
 @tool
 async def discord_whoami() -> str:
-    """Identify the Discord bot account this agent posts as.
+    """Identify the Discord bot account this agent posts as, and who its operator is.
 
-    Returns the bot's username and user ID, plus the operator's captured DM
-    channel (recorded when they last DMed the bot) if there is one — that
-    channel is where proactive/scheduled output is delivered.
+    Returns the bot's username and user ID, the configured operator (admin) user
+    IDs — pass one to ``discord_dm`` to reach your operator, no need to ask them
+    for it — and the captured operator DM channel if there is one (that channel
+    is where proactive/scheduled output is delivered).
     """
     status, body = await _request("GET", "/users/@me")
     if status != 200 or not isinstance(body, dict):
@@ -261,6 +280,16 @@ async def discord_whoami() -> str:
 
     name = body.get("username", "?")
     lines = [f"Bot: @{name} (user ID {body.get('id')})"]
+
+    # The operator's own ID lives in config as the gateway's inbound allowlist.
+    # Surfacing it here is the whole point: otherwise the agent asks the operator
+    # for an ID its own config already holds.
+    admins = sorted(_admin_ids())
+    lines.append(
+        f"Operator user ID(s): {', '.join(admins)} — DM with discord_dm(user_id=...)"
+        if admins
+        else "Operator user ID(s): none configured (admin allowlist empty — anyone may DM the bot)."
+    )
 
     # Lazy + best-effort: return_address reaches for the host's infra.paths, and
     # a missing/corrupt store just means "nothing captured yet" (it never raises).

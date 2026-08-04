@@ -42,9 +42,13 @@ The bot token is stored in `secrets.yaml` (never tracked YAML). `DISCORD_BOT_TOK
   | `discord_dm` | DM a **user** — opens the 1:1 channel first; a user ID is not a channel ID |
   | `discord_read` | Recent channel history |
   | `discord_react` | Add a reaction |
-  | `discord_whoami` | Which bot account it posts as + the captured operator DM channel |
+  | `discord_whoami` | Which bot account it posts as, **the configured operator user ID(s)**, and the captured operator DM channel |
   | `discord_list_guilds` | Servers the bot is in |
   | `discord_list_channels` | Channel IDs in a server (defaults to the only server) |
+
+  `admin_ids` doubles as the answer to "who is my operator?" — `discord_whoami`
+  reports it, so the agent can DM you without asking for an ID your config
+  already holds.
 
   The last three exist because everything else is keyed by a numeric ID that
   nothing in the agent's context supplies — without them the toolset only works

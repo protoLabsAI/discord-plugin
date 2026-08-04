@@ -177,3 +177,36 @@ async def test_whoami_reports_identity_and_return_address(monkeypatch):
     assert "@protoBot" in out and "bot-1" in out
     # No host / no captured address in the suite — must degrade, not raise.
     assert "Operator DM channel:" in out
+
+
+async def test_whoami_reports_the_configured_operator_id(monkeypatch):
+    """The operator's ID is in config as the gateway's inbound allowlist. If the
+    agent can't read it, it asks the operator for an ID its own config holds —
+    which is exactly what happened in the field.
+    """
+    monkeypatch.delenv("DISCORD_ADMIN_IDS", raising=False)
+    dt.configure("tok", ["249386616806834177"])
+    _stub_requests(monkeypatch, {("GET", "/users/@me"): (200, {"id": "bot-1", "username": "protoBot"})})
+
+    out = await dt.discord_whoami.ainvoke({})
+
+    assert "249386616806834177" in out
+    assert "discord_dm" in out  # tells the agent what to do with it
+
+
+async def test_whoami_says_so_when_no_operator_configured(monkeypatch):
+    monkeypatch.delenv("DISCORD_ADMIN_IDS", raising=False)
+    dt.configure("tok", [])
+    _stub_requests(monkeypatch, {("GET", "/users/@me"): (200, {"id": "bot-1", "username": "protoBot"})})
+
+    assert "none configured" in await dt.discord_whoami.ainvoke({})
+
+
+def test_admin_ids_fall_back_to_env_csv(monkeypatch):
+    """Same precedence as the gateway: config wins, env CSV is the fallback."""
+    monkeypatch.setenv("DISCORD_ADMIN_IDS", "111, 222")
+    dt.configure("tok", None)
+    assert dt._admin_ids() == {"111", "222"}
+
+    dt.configure("tok", ["333"])
+    assert dt._admin_ids() == {"333"}
