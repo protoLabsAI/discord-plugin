@@ -1,8 +1,19 @@
 """Outbound Discord tools — the stateless half of the Discord surface (ADR 0015).
 
 Talks to Discord's REST API **v10** directly via ``httpx`` (already a core dep) —
-no ``discord.py``. Three tools: ``discord_send`` / ``discord_read`` /
-``discord_react``. They're **off unless a bot token is configured**: when the
+no ``discord.py``.
+
+- **Act:** ``discord_send`` (channel) · ``discord_dm`` (user) · ``discord_react``
+- **Look:** ``discord_read`` (channel history)
+- **Find:** ``discord_whoami`` · ``discord_list_guilds`` · ``discord_list_channels``
+
+The *find* tools exist because everything else is keyed by a numeric channel ID
+that nothing in the agent's context supplies — without them the toolset is only
+usable when an operator hand-feeds an ID into the persona. ``discord_dm`` is the
+only way to *start* a DM: a user ID is not a channel ID, so reaching a person
+means opening their DM channel first (``POST /users/@me/channels``).
+
+They're **off unless a bot token is configured**: when the
 token is absent the tools are not registered (``register()`` gates on
 ``discord_configured()``), and any direct call degrades to a readable error.
 
@@ -100,22 +111,10 @@ async def _request(method: str, path: str, json_body: dict[str, Any] | None = No
 # ── send ──────────────────────────────────────────────────────────────────────
 
 
-@tool
-async def discord_send(channel_id: str, content: str) -> str:
-    """Post a message to a Discord channel.
-
-    Args:
-        channel_id: Numeric Discord channel ID (e.g. ``1469195643590541353``).
-        content: Message body. Markdown supported. Long messages are split into
-            multiple posts at line boundaries (Discord's 2000-char limit).
-
-    Returns the posted message ID(s), or a readable error.
-    """
-    if not channel_id.strip():
-        return "Error: channel_id is required."
-    if not content.strip():
-        return "Error: content is empty."
-
+async def _post_message(channel_id: str, content: str) -> str:
+    """Post ``content`` to a channel, splitting at line boundaries to stay under
+    Discord's 2000-char limit. Shared by ``discord_send`` and ``discord_dm`` — a
+    DM is just a message to the DM channel, so the chunking must not diverge."""
     chunks: list[str] = []
     remaining = content
     while remaining:
@@ -137,6 +136,59 @@ async def discord_send(channel_id: str, content: str) -> str:
             posted.append(body["id"])
 
     return f"OK: posted {len(posted)} message(s) ({', '.join(posted)})"
+
+
+@tool
+async def discord_send(channel_id: str, content: str) -> str:
+    """Post a message to a Discord channel.
+
+    Use ``discord_list_channels`` to find a channel ID, or ``discord_dm`` to
+    message a person directly (a user ID is NOT a channel ID).
+
+    Args:
+        channel_id: Numeric Discord channel ID (e.g. ``1469195643590541353``).
+        content: Message body. Markdown supported. Long messages are split into
+            multiple posts at line boundaries (Discord's 2000-char limit).
+
+    Returns the posted message ID(s), or a readable error.
+    """
+    if not channel_id.strip():
+        return "Error: channel_id is required."
+    if not content.strip():
+        return "Error: content is empty."
+
+    return await _post_message(channel_id.strip(), content)
+
+
+@tool
+async def discord_dm(user_id: str, content: str) -> str:
+    """Send a direct message to a Discord user.
+
+    Opens (or reuses — Discord makes this idempotent) the 1:1 DM channel with
+    ``user_id``, then posts there. This is the ONLY way to start a DM:
+    ``discord_send`` takes a *channel* ID, and a user ID is not one.
+
+    The bot can only DM users who share a server with it, or who have DMed it
+    before; Discord rejects the rest.
+
+    Args:
+        user_id: Numeric Discord user ID (e.g. ``1234567890123456789``). Right-click
+            a user with Developer Mode on → Copy User ID.
+        content: Message body. Markdown supported; long messages are split.
+    """
+    if not user_id.strip():
+        return "Error: user_id is required."
+    if not content.strip():
+        return "Error: content is empty."
+
+    status, body = await _request("POST", "/users/@me/channels", json_body={"recipient_id": user_id.strip()})
+    if status not in (200, 201):
+        return f"Error: could not open a DM channel with user {user_id}: HTTP {status}: {body}"
+    channel_id = body.get("id") if isinstance(body, dict) else None
+    if not channel_id:
+        return f"Error: Discord returned no DM channel id: {body}"
+
+    return await _post_message(str(channel_id), content)
 
 
 @tool
@@ -186,10 +238,110 @@ async def discord_react(channel_id: str, message_id: str, emoji: str) -> str:
     return f"OK: reacted with {emoji}."
 
 
+# ── discovery ─────────────────────────────────────────────────────────────────
+#
+# Without these the send/read tools are unusable on their own: every one of them
+# needs a numeric channel ID, and nothing in the agent's context supplies one.
+
+# Discord channel `type` ints worth naming; anything else prints as `type=N`.
+_CHANNEL_TYPES = {0: "text", 2: "voice", 4: "category", 5: "announcement", 13: "stage", 15: "forum"}
+
+
+@tool
+async def discord_whoami() -> str:
+    """Identify the Discord bot account this agent posts as.
+
+    Returns the bot's username and user ID, plus the operator's captured DM
+    channel (recorded when they last DMed the bot) if there is one — that
+    channel is where proactive/scheduled output is delivered.
+    """
+    status, body = await _request("GET", "/users/@me")
+    if status != 200 or not isinstance(body, dict):
+        return f"Error: HTTP {status}: {body}"
+
+    name = body.get("username", "?")
+    lines = [f"Bot: @{name} (user ID {body.get('id')})"]
+
+    # Lazy + best-effort: return_address reaches for the host's infra.paths, and
+    # a missing/corrupt store just means "nothing captured yet" (it never raises).
+    try:
+        from .return_address import get as _return_address
+
+        captured = _return_address()
+    except Exception:  # noqa: BLE001 — discovery must not fail on an absent store
+        captured = None
+    lines.append(
+        f"Operator DM channel: {captured} (proactive output lands here)"
+        if captured
+        else "Operator DM channel: none captured yet — it's recorded the first time they DM the bot."
+    )
+    return "\n".join(lines)
+
+
+@tool
+async def discord_list_guilds() -> str:
+    """List the Discord servers (guilds) this bot has been added to.
+
+    Start here when you don't know where to post — then ``discord_list_channels``
+    for that server's channel IDs.
+    """
+    status, body = await _request("GET", "/users/@me/guilds")
+    if status != 200:
+        return f"Error: HTTP {status}: {body}"
+    if not isinstance(body, list):
+        return f"Error: unexpected response: {body}"
+    if not body:
+        return "No servers — the bot hasn't been invited to any. Use discord_dm to message a user directly."
+
+    lines = [f"{len(body)} server(s):"]
+    for guild in body:
+        lines.append(f"  {guild.get('id')}  {guild.get('name', '?')}")
+    return "\n".join(lines)
+
+
+@tool
+async def discord_list_channels(guild_id: str = "") -> str:
+    """List channels in a Discord server, with the IDs ``discord_send`` needs.
+
+    Args:
+        guild_id: Numeric server ID. Optional — if the bot is in exactly one
+            server, that one is used; otherwise the choices are listed.
+    """
+    guild_id = guild_id.strip()
+    if not guild_id:
+        status, body = await _request("GET", "/users/@me/guilds")
+        if status != 200 or not isinstance(body, list):
+            return f"Error: could not resolve a default server: HTTP {status}: {body}"
+        if len(body) != 1:
+            listing = ", ".join(f"{g.get('name')} ({g.get('id')})" for g in body) or "none"
+            return f"Error: guild_id is required — the bot is in {len(body)} server(s): {listing}"
+        guild_id = str(body[0].get("id"))
+
+    status, body = await _request("GET", f"/guilds/{guild_id}/channels")
+    if status != 200:
+        return f"Error: HTTP {status}: {body}"
+    if not isinstance(body, list):
+        return f"Error: unexpected response: {body}"
+
+    lines = [f"{len(body)} channel(s) in server {guild_id}:"]
+    for ch in sorted(body, key=lambda c: (c.get("position") or 0)):
+        kind = _CHANNEL_TYPES.get(ch.get("type"), f"type={ch.get('type')}")
+        lines.append(f"  {ch.get('id')}  #{ch.get('name', '?')} [{kind}]")
+    return "\n".join(lines)
+
+
 # ── registry ────────────────────────────────────────────────────────────────
 
 
 def get_discord_tools() -> list:
-    """The outbound Discord tools. ``get_all_tools`` includes these only when
+    """The outbound Discord tools. ``register()`` includes these only when
     ``discord_configured()`` (a bot token is set)."""
-    return [discord_send, discord_read, discord_react]
+    return [
+        discord_send,
+        discord_dm,
+        discord_read,
+        discord_react,
+        discord_whoami,
+        discord_list_guilds,
+        discord_list_channels,
+    ]
