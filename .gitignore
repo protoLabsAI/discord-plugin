@@ -5,3 +5,8 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 .DS_Store
+
+# Coding-agent scratch (proto / Claude Code)
+.proto/memory/
+.proto/session-notes.md
+.proto/repo-map-cache.json
