@@ -353,7 +353,7 @@ async def discord_list_channels(guild_id: str = "") -> str:
         return f"Error: unexpected response: {body}"
 
     lines = [f"{len(body)} channel(s) in server {guild_id}:"]
-    for ch in sorted(body, key=lambda c: (c.get("position") or 0)):
+    for ch in sorted(body, key=lambda c: c.get("position") or 0):
         kind = _CHANNEL_TYPES.get(ch.get("type"), f"type={ch.get('type')}")
         lines.append(f"  {ch.get('id')}  #{ch.get('name', '?')} [{kind}]")
     return "\n".join(lines)
