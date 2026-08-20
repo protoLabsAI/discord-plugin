@@ -15,7 +15,9 @@ surface Discord activity. (Routing the conversation itself through the single
 conversation into one thread and lose per-DM continuity.)
 
 Ported UX (from ``-deprecated-gina``): **burst debounce**, **conversation
-continuity**, **slow-response reactions** (👀→✅ only when slow), **auto-threading**,
+continuity**, **slow-response reactions** (👀→✅ only when slow), **auto-threading**
+(follow-ups inside the thread continue the conversation), **reaction-triggered
+research threads** (🔬 on any message opens a thread and runs the agent on it),
 and an **admin allowlist**. Long-window context warming and return-address
 delivery are follow-up slices (#489).
 
@@ -47,6 +49,7 @@ _GATEWAY_INTENTS = (1 << 0) | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 15)
 _MAX_LEN = 1900  # Discord's 2000 cap with headroom
 _REACTION_THINKING = "👀"
 _REACTION_DONE = "✅"
+_REACTION_RESEARCH = "🔬"
 
 
 def _f(env: str, default: float) -> float:
@@ -315,10 +318,15 @@ async def _handle_message(d: dict, bot_id: str) -> None:
     is_mentioned = any(m.get("id") == bot_id for m in d.get("mentions", []))
     buffer_key = f"{channel_id}:{user_id}"
     has_active_buffer = buffer_key in _message_buffers
+    # Inside a tracked thread (auto-thread alias or 🔬 research thread) the
+    # message arrives with channel_id == thread_id; any participant continues.
+    is_thread_convo = not is_dm and _conversations.has_thread(channel_id)
 
-    # Guild messages need a mention, an active conversation, or an in-progress
-    # burst; DMs always continue.
-    if not is_dm and not (is_mentioned or _conversations.has(channel_id, user_id) or has_active_buffer):
+    # Guild messages need a mention, an active conversation (direct or via a
+    # thread alias), or an in-progress burst; DMs always continue.
+    if not is_dm and not (
+        is_mentioned or is_thread_convo or _conversations.has(channel_id, user_id) or has_active_buffer
+    ):
         return
 
     admins = _admin_ids()
@@ -349,7 +357,15 @@ async def _handle_message(d: dict, bot_id: str) -> None:
         timeout_s = (
             _f("DISCORD_DM_CONVERSATION_TIMEOUT_S", 900) if is_dm else _f("DISCORD_CHANNEL_CONVERSATION_TIMEOUT_S", 300)
         )
-        conversation_id, is_new, _turn = _conversations.get_or_create(channel_id, user_id, timeout_s=timeout_s)
+        if is_thread_convo:
+            # Thread conversations are keyed by thread alone (shared with
+            # teammates). The session stays tagged with the origin channel so
+            # the LangGraph thread carries over from the pre-thread turns.
+            conversation_id, is_new, _turn = _conversations.get_or_create_thread(channel_id, timeout_s=timeout_s)
+            session_channel_id = _conversations.thread_origin(channel_id) or channel_id
+        else:
+            conversation_id, is_new, _turn = _conversations.get_or_create(channel_id, user_id, timeout_s=timeout_s)
+            session_channel_id = channel_id
         entry = {
             "messages": [],
             "channel_id": channel_id,
@@ -357,6 +373,7 @@ async def _handle_message(d: dict, bot_id: str) -> None:
             "is_dm": is_dm,
             "conversation_id": conversation_id,
             "is_new_conversation": is_new,
+            "session_channel_id": session_channel_id,
             "timer": None,
         }
         _message_buffers[buffer_key] = entry
@@ -438,7 +455,10 @@ async def _flush_burst(buffer_key: str) -> None:
 
     # Surface-tagged session_id: keeps the LangGraph thread keyed per conversation
     # while showing "discord" provenance in audit/traces instead of a bare UUID.
-    surface_tag = "discord-dm" if is_dm else f"discord-channel-{channel_id}"
+    # Thread follow-ups tag the origin channel so the session_id matches the
+    # pre-thread turns exactly.
+    session_channel_id: str = entry.get("session_channel_id") or channel_id
+    surface_tag = "discord-dm" if is_dm else f"discord-channel-{session_channel_id}"
     session_id = f"{surface_tag}:{conversation_id}"
     try:
         reply_text = await _ask_agent(forward_content, session_id)
@@ -467,10 +487,90 @@ async def _flush_burst(buffer_key: str) -> None:
             ops.append(_react(channel_id, m["id"], _REACTION_DONE))
         await asyncio.gather(*ops, return_exceptions=True)
 
-    # Auto-thread the first turn of a guild conversation to keep the channel tidy.
+    # Auto-thread the first turn of a guild conversation to keep the channel
+    # tidy — and alias the thread onto the conversation, so follow-ups posted
+    # inside it (which arrive with channel_id == thread_id) aren't dropped.
     if not is_dm and is_new and reply_message_id:
         thread_name = msgs[-1]["content"].split("\n", 1)[0][:80] or "thread"
-        await _start_thread(channel_id, reply_message_id, thread_name)
+        thread = await _start_thread(channel_id, reply_message_id, thread_name)
+        if isinstance(thread, dict) and thread.get("id"):
+            _conversations.alias_thread(thread["id"], channel_id, user_id)
+
+
+# ── reaction handling (🔬 research threads) ───────────────────────────────────
+
+
+async def _handle_reaction(d: dict, bot_id: str) -> None:
+    """MESSAGE_REACTION_ADD handler — the 🔬 research-thread pattern. Reacting
+    🔬 to any message opens a thread on it, runs the agent on the message
+    content, and replies in the thread. The thread is registered as a live
+    conversation, so plain follow-ups inside it continue the research."""
+    if (d.get("emoji") or {}).get("name") != _REACTION_RESEARCH:
+        return
+    user_id = d.get("user_id", "")
+    if not user_id or user_id == bot_id:
+        return
+    if (((d.get("member") or {}).get("user")) or {}).get("bot"):
+        return
+    channel_id = d.get("channel_id", "")
+    message_id = d.get("message_id", "")
+    if not channel_id or not message_id:
+        return
+
+    admins = _admin_ids()
+    if admins and user_id not in admins:
+        log.info("[discord] ignored 🔬 reaction from %s (not in DISCORD_ADMIN_IDS)", user_id)
+        return
+
+    msg = await _api("GET", f"/channels/{channel_id}/messages/{message_id}")
+    content = ((msg or {}).get("content") or "").strip()
+    if not content:
+        return
+
+    first_line = content.split("\n", 1)[0]
+    thread = await _start_thread(channel_id, message_id, f"🔬 {first_line[:50]}")
+    thread_id = thread.get("id") if isinstance(thread, dict) else None
+    if not thread_id:
+        return  # message already has a thread, DM channel, … — nothing to do
+
+    log.info("[discord] 🔬 research thread %s on message %s (by %s)", thread_id, message_id, user_id)
+    _emit("discord.research_thread", {"channel_id": channel_id, "thread_id": thread_id, "user_id": user_id})
+
+    # Live conversation keyed by the thread — follow-ups posted inside it flow
+    # through the normal MESSAGE_CREATE path via the thread gate.
+    conversation_id, _is_new, _turn = _conversations.get_or_create_thread(
+        thread_id, timeout_s=_f("DISCORD_CHANNEL_CONVERSATION_TIMEOUT_S", 300)
+    )
+    session_id = f"discord-channel-{thread_id}:{conversation_id}"
+
+    typing_task = asyncio.create_task(_keep_typing(thread_id))
+    try:
+        reply_text = await _ask_agent(content, session_id)
+    finally:
+        typing_task.cancel()
+    if not reply_text.strip():
+        reply_text = "Sorry — I couldn't get anywhere with that one. Could you add some detail in this thread?"
+
+    # Plain post — the thread already hangs off the reacted message, so no
+    # reply-quote is needed.
+    await _reply(thread_id, "", reply_text, is_dm=True)
+
+    tlog = _get_turn_log()
+    if tlog is not None:
+        try:
+            tlog.record_user_turn(thread_id, user_id, content, conversation_id=conversation_id)
+            tlog.record_assistant_turn(thread_id, user_id, reply_text, conversation_id=conversation_id)
+        except Exception:
+            log.exception("[discord] research-thread turn logging failed (non-fatal)")
+
+
+async def _handle_reaction_safe(d: dict, bot_id: str) -> None:
+    """Task wrapper: the research flow awaits a full agent turn, so it runs off
+    the gateway read loop; this keeps its failures logged, not lost."""
+    try:
+        await _handle_reaction(d, bot_id)
+    except Exception:
+        log.exception("[discord] reaction handler failed")
 
 
 # ── gateway loop ──────────────────────────────────────────────────────────────
@@ -544,6 +644,8 @@ async def _run_gateway() -> None:
                                 await _handle_message(d, bot_id)
                             except Exception:
                                 log.exception("[discord] message handler failed")
+                        elif t == "MESSAGE_REACTION_ADD":
+                            asyncio.create_task(_handle_reaction_safe(d, bot_id))
                     elif op in (7, 9):  # RECONNECT / INVALID_SESSION
                         log.info("[discord] reconnect requested (op %s)", op)
                         break
