@@ -22,11 +22,15 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
   .row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--pl-color-border)}
   .row:last-child{border-bottom:none} .k{color:var(--pl-color-fg-muted)}
   .empty{color:var(--pl-color-fg-muted);padding:8px 0} .err{color:var(--pl-color-status-error);font-size:12px}
+  .h2{font-size:14px;margin:22px 0 2px} code{font-size:11px}
 </style></head><body>
 <div class="wrap">
   <h1>Discord</h1>
   <p class="sub">Inbound DM/@-mention gateway + outbound tools.</p>
   <div class="pl-card" id="status"><div class="empty">Loading…</div></div>
+  <h2 class="h2">Peer channels</h2>
+  <p class="sub">Cross-operator agent chat — another operator's bot talking to yours in a dedicated channel.</p>
+  <div class="pl-card" id="peers"><div class="empty">Loading…</div></div>
 </div>
 <script type="module">
   "use strict";
@@ -56,6 +60,24 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
         row("Bot identity", botState) +
         row("Gateway", gwState) +
         row("Admin allowlist", '<span class="k">'+(s.admin_ids?(s.admin_ids+" id(s)"):"anyone")+'</span>');
+      const p = s.peers || {};
+      if(!p.configured){
+        $("peers").innerHTML = '<div class="empty">Off — set peer channel IDs and peer bot IDs in Settings → Discord.</div>';
+      } else {
+        const armed = p.armed ? badge("success","armed")
+                    : badge("error","disarmed — host lacks tool_fence (upgrade protoAgent ≥ 0.146)");
+        const ex = (p.exchanges||[]).map(e =>
+          row("#"+e.channel_id, (e.paused ? badge("warning","⏸ paused") : badge("success","live"))
+            + ' <span class="k">'+e.peer_turns+"/"+p.max_turns+" peer turns</span>")).join("");
+        $("peers").innerHTML =
+          row("Status", armed) +
+          row("Channels", '<span class="k">'+esc((p.channel_ids||[]).join(", "))+'</span>') +
+          row("Peer bots", '<span class="k">'+esc((p.bot_ids||[]).join(", "))+'</span>') +
+          row("Turn budget", '<span class="k">'+esc(p.max_turns)+'</span>') +
+          row("Peer-turn tools", '<code>'+esc((p.tools||[]).join(", "))+'</code>') +
+          ((p.stopped_channels||[]).length ? row("🛑 stopped", '<span class="k">'+esc(p.stopped_channels.join(", "))+'</span>') : "") +
+          (ex || '<div class="empty">No live exchange.</div>');
+      }
     }catch(e){ $("status").innerHTML='<div class="err">'+esc(e)+'</div>'; }
   }
   kit.initPluginView(load);
@@ -78,7 +100,7 @@ def build_view_routers(registry):
 
     @data.get("/status")
     async def status() -> dict:
-        from .gateway import gateway_status, validate_token
+        from .gateway import gateway_status, peer_status, validate_token
 
         cfg = registry.config or {}
         token = cfg.get("bot_token") or os.environ.get("DISCORD_BOT_TOKEN", "")
@@ -94,6 +116,7 @@ def build_view_routers(registry):
             "token_configured": bool(token),
             "admin_ids": len(cfg.get("admin_ids") or []),
             "gateway": gateway_status(),
+            "peers": peer_status(),
             "bot": bot,
         }
 

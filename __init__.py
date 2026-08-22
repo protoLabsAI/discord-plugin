@@ -8,10 +8,11 @@ module's ``register()`` is the wiring.
 
 Contributes: a **surface** (the inbound gateway, lifecycle-managed +
 reconnect-on-save), a **route** (``POST /api/config/test-discord`` — the console's
-Test button), and the outbound **tools** (``discord_send`` / ``discord_read`` /
-``discord_react``, registered when a token is set). Config/secrets/Settings come
-from the manifest (ADR 0019). Behavior is identical to the former first-party
-``plugins/discord``.
+Test button), and the outbound **tools** (``discord_send`` / ``discord_dm`` /
+``discord_read`` / ``discord_react`` / discovery, registered when a token is set).
+Config/secrets/Settings come from the manifest (ADR 0019). Optional **peer
+channels** let another operator's bot talk to this agent in a dedicated channel —
+loop-bounded and tool-fenced through the host's per-turn ``tool_fence`` seam.
 """
 
 from __future__ import annotations
@@ -58,10 +59,13 @@ def _seed(cfg: dict) -> None:
     allowlist while the agent had no way to learn its own operator's user ID.
     """
     from .gateway import configure as _gateway_configure
+    from .gateway import configure_peers as _gateway_configure_peers
     from .tools import configure as _tools_configure
 
     _gateway_configure(cfg.get("bot_token"), cfg.get("admin_ids"))
     _tools_configure(cfg.get("bot_token"), cfg.get("admin_ids"))
+    # Peer channels (cross-operator agent chat) live in the gateway only.
+    _gateway_configure_peers(cfg)
 
 
 def _launch(cfg: dict, host) -> None:

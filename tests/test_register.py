@@ -97,3 +97,48 @@ async def test_reload_reseeds_the_tool_token(registry, monkeypatch):
     await reload(_NewConfig())
 
     assert dt._token() == "new-token"
+
+
+def test_config_peer_settings_reach_the_gateway(monkeypatch):
+    """Peer channels are seeded from the same resolved config as the token — a
+    UI-set peer list must arm the gate, not only an env/YAML one."""
+    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+    registry = FakeRegistry(
+        config={
+            "enabled": False,
+            "bot_token": "t",
+            "peer_channel_ids": ["111"],
+            "peer_bot_ids": ["222"],
+            "peer_max_turns": 3,
+            "peer_tools": ["discord_read"],
+        }
+    )
+    discord.register(registry)
+
+    import discord.gateway as gw
+
+    st = gw.peer_status()
+    assert st["configured"] is True
+    assert st["channel_ids"] == ["111"] and st["bot_ids"] == ["222"]
+    assert st["max_turns"] == 3 and st["tools"] == ["discord_read"]
+    gw.configure_peers({})  # don't leak into the next test
+
+
+async def test_reload_reseeds_peer_settings(registry, monkeypatch):
+    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+    registry.config = {"enabled": False, "bot_token": "t"}
+    discord.register(registry)
+
+    import discord.gateway as gw
+
+    assert gw.peer_status()["configured"] is False
+    reload = next(s for s in registry.surfaces if s["name"] == "discord-gateway")["reload"]
+
+    class _NewConfig:
+        plugin_config = {
+            "discord": {"enabled": False, "bot_token": "t", "peer_channel_ids": ["1"], "peer_bot_ids": ["2"]}
+        }
+
+    await reload(_NewConfig())
+    assert gw.peer_status()["configured"] is True
+    gw.configure_peers({})
