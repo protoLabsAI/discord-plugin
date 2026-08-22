@@ -15,6 +15,11 @@ participant continues the same conversation. ``alias_thread`` links an
 auto-created thread back onto the (channel, user) conversation it grew out of;
 ``get_or_create_thread`` also serves thread-native conversations (🔬 research
 threads) with no channel ancestor.
+
+Peer channels (cross-operator agent chat) are keyed by ``channel_id`` alone too
+(``peer:<channel_id>``): both operators' bots and both humans share one
+conversation there. The entry also carries the bot↔bot turn budget
+(``peer_turns``) that bounds an exchange until a human speaks again.
 """
 
 from __future__ import annotations
@@ -37,6 +42,11 @@ class ConversationEntry:
     last_activity: float
     timeout_s: float
     turn_number: int
+    # Peer channels: consecutive turns this bot has taken in reply to a PEER
+    # AGENT (reset by any admin-human message in the channel). ``peer_paused``
+    # is set once the budget notice has been posted so it's posted once.
+    peer_turns: int = 0
+    peer_paused: bool = False
 
 
 class ConversationManager:
@@ -148,6 +158,48 @@ class ConversationManager:
         thread-native (🔬) conversation, None when untracked."""
         entry = self._conversations.get(self._thread_key(thread_id))
         return entry.channel_id if entry is not None else None
+
+    # ── peer channels (cross-operator agent chat) ─────────────────────────
+
+    @staticmethod
+    def _peer_key(channel_id: str) -> str:
+        return f"peer:{channel_id}"
+
+    def get_or_create_peer(self, channel_id: str, *, timeout_s: float = 900.0) -> tuple[str, bool, int]:
+        """Channel-keyed conversation for a peer channel — bots and humans all
+        continue the same one. Same contract as ``get_or_create``."""
+        key = self._peer_key(channel_id)
+        now = time.monotonic()
+        existing = self._conversations.get(key)
+        if existing and (now - existing.last_activity) < existing.timeout_s:
+            existing.last_activity = now
+            existing.turn_number += 1
+            return existing.conversation_id, False, existing.turn_number
+
+        conversation_id = str(uuid.uuid4())
+        self._conversations[key] = ConversationEntry(
+            conversation_id=conversation_id,
+            channel_id=channel_id,
+            user_id="",  # shared space — no single owner
+            started_at=now,
+            last_activity=now,
+            timeout_s=timeout_s,
+            turn_number=1,
+        )
+        return conversation_id, True, 1
+
+    def peer_entry(self, channel_id: str) -> ConversationEntry | None:
+        """The live peer-channel entry (for the turn budget), or None."""
+        entry = self._conversations.get(self._peer_key(channel_id))
+        if entry is None or (time.monotonic() - entry.last_activity) >= entry.timeout_s:
+            return None
+        return entry
+
+    def has_peer(self, channel_id: str) -> bool:
+        return self.peer_entry(channel_id) is not None
+
+    def end_peer(self, channel_id: str) -> None:
+        self._conversations.pop(self._peer_key(channel_id), None)
 
     def has(self, channel_id: str, user_id: str) -> bool:
         entry = self._conversations.get(self._key(channel_id, user_id))

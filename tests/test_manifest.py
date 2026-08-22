@@ -20,7 +20,18 @@ def test_manifest_basics():
     assert m["config_section"] == "discord"
     assert m["secrets"] == ["bot_token"]
     assert m["enabled"] is False  # ships disabled — enabling is the operator's trust decision
-    assert {s["key"] for s in m["settings"]} == {"enabled", "bot_token", "admin_ids"}
+    assert {s["key"] for s in m["settings"]} == {
+        "enabled",
+        "bot_token",
+        "admin_ids",
+        "peer_channel_ids",
+        "peer_bot_ids",
+        "peer_max_turns",
+        "peer_tools",
+    }
+    # Peer channels ship OFF (both lists empty) with the read-only tool default.
+    assert m["config"]["peer_channel_ids"] == [] and m["config"]["peer_bot_ids"] == []
+    assert m["config"]["peer_tools"] == ["discord_read", "load_skill", "knowledge_search"]
 
 
 def test_version_coherence():

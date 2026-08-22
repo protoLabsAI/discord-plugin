@@ -1,11 +1,13 @@
 id: discord
 name: Discord
-version: 0.2.1
+version: 0.3.0
 description: >-
   Inbound Discord DM/@-mention gateway + outbound tools (ADR 0015/0016). A
   standalone protoAgent plugin (ADR 0018/0019) — install it from this repo and
   enable it; it's not bundled with the host. Off until a bot token is set in
   System → Settings → Discord. Disable with `plugins: { disabled: [discord] }`.
+  Optional peer channels let another operator's agent talk to yours in a
+  dedicated channel (loop-bounded, tool-fenced; needs host ≥ 0.146).
 enabled: false                 # ships disabled — enabling is the operator's trust decision
 repository: https://github.com/protoLabsAI/discord-plugin
 min_protoagent_version: "0.34.0"
@@ -29,11 +31,20 @@ public_paths:
 config:
   enabled: false
   admin_ids: []
+  # Peer channels (cross-operator agent chat) — off until BOTH lists are set.
+  peer_channel_ids: []
+  peer_bot_ids: []
+  peer_max_turns: 6
+  peer_tools: [discord_read, load_skill, knowledge_search]
 secrets: [bot_token]
 settings:
   - { key: enabled, label: "Enable Discord", type: bool, description: "Inbound DM gateway. Needs the bot token below; reconnects live on save." }
   - { key: bot_token, label: "Bot token", type: secret, description: "Discord bot token (Developer Portal → your app → Bot → Reset Token). Use “Test connection” to verify before saving." }
   - { key: admin_ids, label: "Admin user IDs", type: string_list, description: "Discord user IDs allowed to DM the bot (one per line). Empty = anyone. Also tells the agent who its operator is, so it can DM you without asking for your ID." }
+  - { key: peer_channel_ids, label: "Peer channel IDs", type: string_list, description: "Channels shared with another operator's agent (one per line). In these, an allowlisted peer bot that @-mentions yours gets a reply; auto-threading is off. Needs host ≥ 0.146." }
+  - { key: peer_bot_ids, label: "Peer bot user IDs", type: string_list, description: "The OTHER operator's bot user IDs trusted in the peer channels (one per line). Every other bot stays ignored." }
+  - { key: peer_max_turns, label: "Peer turn budget", type: number, description: "Consecutive replies to a peer agent before the bot posts ⏸ and waits for an admin to speak. Bounds any bot↔bot loop." }
+  - { key: peer_tools, label: "Peer turn tools", type: string_list, description: "Tool allowlist for turns triggered by a peer agent (one per line). Default: discord_read, load_skill, knowledge_search — read-only. Empty = no tools at all." }
 # Declarative transparency (shown in the console; not yet enforced). httpx +
 # websockets are core host deps, so no requires_pip.
 capabilities:
