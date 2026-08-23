@@ -1,0 +1,19 @@
+name: Release
+
+# Thin caller for the org's reusable plugin-release workflow. On a `chore: release
+# vX.Y.Z` push to main (or a manual dispatch) it cuts the tag, publishes a GitHub
+# Release with LLM-themed notes, and fires the Discord notification. The reusable
+# workflow no-ops idempotently when the tag already exists.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  release:
+    if: >-
+      github.repository == 'protoLabsAI/discord-plugin' &&
+      (github.event_name == 'workflow_dispatch' ||
+       startsWith(github.event.head_commit.message, 'chore: release v'))
+    uses: protoLabsAI/release-tools/.github/workflows/plugin-release.yml@v2
+    secrets: inherit
