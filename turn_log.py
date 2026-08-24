@@ -7,9 +7,9 @@ SQLite lets us query the last N turns for a ``(channel, user)`` pair and prepend
 them, restoring continuity across timeouts and restarts.
 
 Separate DB from the knowledge store so chat-history bulk doesn't pollute
-semantic memory. Instance-scoped via ``paths.scope_leaf`` (ADR 0004), ``/sandbox``
-→ ``~/.protoagent`` fallback; override with ``DISCORD_LOG_PATH``. Ported from
-``-deprecated-gina``.
+semantic memory. Instance-scoped via ``infra.paths.instance_paths()`` (ADR 0004/0065),
+with a ``~/.protoagent`` fallback for host-free contexts; override with
+``DISCORD_LOG_PATH``. Ported from ``-deprecated-gina``.
 """
 
 from __future__ import annotations
@@ -52,25 +52,30 @@ class Turn:
 
 
 def _default_db_path() -> Path:
+    """Where the turn log lives: ``DISCORD_LOG_PATH``, else this instance's store.
+
+    The host import is lazy AND guarded on purpose. Lazy so the module stays importable
+    with no protoAgent installed (the test suite runs host-free); guarded so a host that
+    has moved this API degrades to a working default instead of taking the feature down —
+    which is exactly what happened before: this function called ``infra.paths.scope_leaf``,
+    the two-tier instance-paths cutover (ADR 0065) removed it, and the resulting ImportError
+    was swallowed by the caller's ``except`` — long-window context was silently off on every
+    current host, with no turns.db written anywhere.
+    """
     override = os.environ.get("DISCORD_LOG_PATH")
     if override:
         p = Path(override)
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
-    from infra.paths import scope_leaf
-
-    leaf = Path("discord") / "turns.db"
-    configured = scope_leaf(Path("/sandbox") / leaf)
     try:
-        configured.parent.mkdir(parents=True, exist_ok=True)
-        if os.access(configured.parent, os.W_OK):
-            return configured
-    except OSError:
-        pass
-    fallback = scope_leaf(Path.home() / ".protoagent" / leaf)
-    fallback.parent.mkdir(parents=True, exist_ok=True)
-    return fallback
+        from infra.paths import instance_paths
+
+        base = instance_paths().store("discord")
+    except Exception:  # noqa: BLE001 — host-free, or a host whose paths API moved again
+        base = Path.home() / ".protoagent" / "discord"
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "turns.db"
 
 
 class TurnLog:
