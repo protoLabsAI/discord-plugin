@@ -24,24 +24,26 @@ def turn_log_mod():
     return importlib.import_module("discord.turn_log")
 
 
-def test_default_db_path_resolves_through_the_sdk(turn_log_mod, monkeypatch, tmp_path):
-    """The default path uses the released host seam, not a core path implementation."""
+def test_default_turn_log_resolves_sdk_path_and_creates_directory(turn_log_mod, monkeypatch, tmp_path):
+    """The SDK path is used and made writable before SQLite opens the database."""
     monkeypatch.delenv("DISCORD_LOG_PATH", raising=False)
     calls = []
+    store = tmp_path / "missing" / "discord"
 
     class FakeSdk:
         @staticmethod
         def plugin_store(*, plugin_id):
             calls.append(plugin_id)
-            return tmp_path
+            return store
 
     graph = ModuleType("graph")
     graph.sdk = FakeSdk
     monkeypatch.setitem(sys.modules, "graph", graph)
 
-    path = turn_log_mod._default_db_path()
+    log = turn_log_mod.TurnLog()
 
-    assert path == tmp_path / "turns.db"
+    assert log.db_path == store / "turns.db"
+    assert log.db_path.parent.is_dir()
     assert calls == ["discord"]
 
 
