@@ -7,8 +7,7 @@ SQLite lets us query the last N turns for a ``(channel, user)`` pair and prepend
 them, restoring continuity across timeouts and restarts.
 
 Separate DB from the knowledge store so chat-history bulk doesn't pollute
-semantic memory. Instance-scoped via ``infra.paths.instance_paths()`` (ADR 0004/0065),
-with a ``~/.protoagent`` fallback for host-free contexts; override with
+semantic memory. Instance-scoped through ``sdk.plugin_store``; override with
 ``DISCORD_LOG_PATH``. Ported from ``-deprecated-gina``.
 """
 
@@ -54,13 +53,8 @@ class Turn:
 def _default_db_path() -> Path:
     """Where the turn log lives: ``DISCORD_LOG_PATH``, else this instance's store.
 
-    The host import is lazy AND guarded on purpose. Lazy so the module stays importable
-    with no protoAgent installed (the test suite runs host-free); guarded so a host that
-    has moved this API degrades to a working default instead of taking the feature down —
-    which is exactly what happened before: this function called ``infra.paths.scope_leaf``,
-    the two-tier instance-paths cutover (ADR 0065) removed it, and the resulting ImportError
-    was swallowed by the caller's ``except`` — long-window context was silently off on every
-    current host, with no turns.db written anywhere.
+    The host import remains lazy so this module can be imported by its standalone test
+    suite. The manifest's v0.148 floor guarantees the SDK seam when a host loads it.
     """
     override = os.environ.get("DISCORD_LOG_PATH")
     if override:
@@ -68,13 +62,9 @@ def _default_db_path() -> Path:
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
-    try:
-        from infra.paths import instance_paths
+    from graph import sdk
 
-        base = instance_paths().store("discord")
-    except Exception:  # noqa: BLE001 — host-free, or a host whose paths API moved again
-        base = Path.home() / ".protoagent" / "discord"
-    base.mkdir(parents=True, exist_ok=True)
+    base = sdk.plugin_store(plugin_id="discord")
     return base / "turns.db"
 
 

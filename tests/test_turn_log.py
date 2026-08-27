@@ -13,7 +13,8 @@ So these tests call the thing.
 from __future__ import annotations
 
 import importlib
-import os
+import sys
+from types import ModuleType
 
 import pytest
 
@@ -23,20 +24,25 @@ def turn_log_mod():
     return importlib.import_module("discord.turn_log")
 
 
-def test_default_db_path_resolves(turn_log_mod, monkeypatch, tmp_path):
-    """The regression: resolving the default path must not raise, with or without a host.
-
-    Whatever the host's paths API is doing, this returns a usable, created directory —
-    it is the only thing standing between the feature and a silent outage.
-    """
+def test_default_db_path_resolves_through_the_sdk(turn_log_mod, monkeypatch, tmp_path):
+    """The default path uses the released host seam, not a core path implementation."""
     monkeypatch.delenv("DISCORD_LOG_PATH", raising=False)
-    monkeypatch.setattr(os.path, "expanduser", os.path.expanduser)  # no-op; keep HOME real
-    monkeypatch.setenv("HOME", str(tmp_path))
+    calls = []
+
+    class FakeSdk:
+        @staticmethod
+        def plugin_store(*, plugin_id):
+            calls.append(plugin_id)
+            return tmp_path
+
+    graph = ModuleType("graph")
+    graph.sdk = FakeSdk
+    monkeypatch.setitem(sys.modules, "graph", graph)
 
     path = turn_log_mod._default_db_path()
 
-    assert path.name == "turns.db"
-    assert path.parent.is_dir(), "the parent directory must exist — callers open it immediately"
+    assert path == tmp_path / "turns.db"
+    assert calls == ["discord"]
 
 
 def test_env_override_wins(turn_log_mod, monkeypatch, tmp_path):
