@@ -291,7 +291,7 @@ async def discord_whoami() -> str:
         else "Operator user ID(s): none configured (admin allowlist empty — anyone may DM the bot)."
     )
 
-    # Lazy + best-effort: return_address reaches for the host's infra.paths, and
+    # Lazy + best-effort: return_address reaches for the host's plugin store, and
     # a missing/corrupt store just means "nothing captured yet" (it never raises).
     try:
         from .return_address import get as _return_address
