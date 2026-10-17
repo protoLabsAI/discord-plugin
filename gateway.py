@@ -524,8 +524,10 @@ async def _handle_message(d: dict, bot_id: str) -> None:
 
     # Capture the DM channel as the operator's return address so scheduler-fired /
     # proactive turns have somewhere to deliver. Only DM channels — a guild
-    # channel is not a private inbox. Idempotent + best-effort.
-    if is_dm:
+    # channel is not a private inbox. Only a CONFIGURED admin may set it: with no admin
+    # list, any user who DMs the bot would otherwise redirect the operator's proactive
+    # output (reminders, inbox results) to themselves. Idempotent + best-effort.
+    if is_dm and not is_peer and user_id in _admin_ids():
         return_address.record(channel_id)
 
     # Buffer + (re)arm the debounce timer. No immediate reaction — fast replies

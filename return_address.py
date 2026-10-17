@@ -64,7 +64,10 @@ def record(channel_id: str) -> None:
     try:
         if get() == channel_id:
             return
-        _path().write_text(json.dumps({_KEY: channel_id}))
+        path = _path()
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps({_KEY: channel_id}))
+        os.replace(tmp, path)  # atomic: a crash mid-write never leaves a truncated file
         log.info("[discord] recorded return address (DM channel %s)", channel_id)
     except Exception:
         log.exception("[discord] failed to record return address (non-fatal)")

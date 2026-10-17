@@ -200,3 +200,31 @@ async def test_reaction_ignores_other_emoji_and_self(monkeypatch):
     await gw._handle_reaction(_reaction(emoji="👍"), "bot")
     await gw._handle_reaction(_reaction(user_id="bot"), "bot")
     assert api_calls == [] and sessions == []
+
+
+def _dm(user_id, content="hi", message_id="dm1"):
+    return {
+        "id": message_id,
+        "channel_id": f"dm-{user_id}",
+        "content": content,
+        "author": {"id": user_id, "username": user_id},
+        "mentions": [],
+    }
+
+
+async def test_only_a_configured_admin_dm_sets_the_return_address(monkeypatch):
+    """A stranger's DM must never redirect the operator's proactive output to themselves,
+    including when no admin list is configured at all."""
+    _wire(monkeypatch)
+    recorded = []
+    monkeypatch.setattr(gw.return_address, "record", recorded.append)
+
+    monkeypatch.setattr(gw, "_cfg_admin_ids", set())
+    await gw._handle_message(_dm("stranger"), "bot")
+    assert recorded == []
+
+    monkeypatch.setattr(gw, "_cfg_admin_ids", {"op"})
+    await gw._handle_message(_dm("stranger", message_id="dm2"), "bot")
+    assert recorded == []
+    await gw._handle_message(_dm("op", message_id="dm3"), "bot")
+    assert recorded == ["dm-op"]
