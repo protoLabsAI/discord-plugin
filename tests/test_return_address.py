@@ -107,9 +107,8 @@ async def test_whoami_reports_a_recorded_dm_channel(ra, fake_store, monkeypatch)
     assert "Operator DM channel: dm-321" in out
 
 
-def test_record_writes_atomically_and_leaves_no_temp_file(tmp_path, monkeypatch):
+def test_record_writes_atomically_and_leaves_no_temp_file(ra, tmp_path, monkeypatch):
     monkeypatch.setenv("DISCORD_RETURN_ADDRESS_PATH", str(tmp_path / "ra.json"))
-    import return_address as ra
 
     ra.record("dm-atomic")
     assert ra.get() == "dm-atomic"
