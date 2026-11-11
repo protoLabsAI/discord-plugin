@@ -1,7 +1,6 @@
 name: CI
 
-# Lint + test the plugin on the org's Namespace Linux profile (override via the
-# NSC_RUNNER repo var; falls back to a hosted runner on a fork that lacks it).
+# Lint + test the plugin on a GitHub-hosted runner (ubuntu-latest).
 on:
   pull_request:
   push:
@@ -10,7 +9,7 @@ on:
 
 jobs:
   test:
-    runs-on: ${{ vars.NSC_RUNNER || 'namespace-profile-protolabs-linux' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Setup Python
