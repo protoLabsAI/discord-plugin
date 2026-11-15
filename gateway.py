@@ -777,6 +777,13 @@ async def _flush_burst(buffer_key: str) -> None:
         thread = await _start_thread(channel_id, reply_message_id, thread_name)
         if isinstance(thread, dict) and thread.get("id"):
             _conversations.alias_thread(thread["id"], channel_id, user_id)
+            # The reply is the thread's starter message. Persist its identity
+            # before the first follow-up, so a restart cannot lose the alias.
+            if tlog is not None:
+                try:
+                    tlog.record_assistant_turn(thread["id"], user_id, reply_text, conversation_id=conversation_id)
+                except Exception:
+                    log.exception("[discord] auto-thread turn logging failed (non-fatal)")
 
 
 # ── reaction handling (🔬 research threads) ───────────────────────────────────
@@ -841,7 +848,8 @@ async def _handle_reaction(d: dict, bot_id: str) -> None:
     conversation_id, _is_new, _turn = _conversations.get_or_create_thread(
         thread_id, timeout_s=_f("DISCORD_CHANNEL_CONVERSATION_TIMEOUT_S", 300)
     )
-    session_id = f"discord-channel-{thread_id}:{conversation_id}"
+    session_channel_id = _conversations.thread_origin(thread_id) or thread_id
+    session_id = f"discord-channel-{session_channel_id}:{conversation_id}"
 
     typing_task = asyncio.create_task(_keep_typing(thread_id))
     try:

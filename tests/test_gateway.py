@@ -300,3 +300,74 @@ async def test_turn_log_init_failure_preserves_mentioned_message(monkeypatch):
     await _post_and_flush(_msg("chan-1", "alice", "<@bot> hello", mentions=("bot",)))
     assert len(sessions) == 1
     assert gw._turn_log is False
+
+
+@pytest.mark.parametrize("research", [False, True], ids=["auto-thread", "research-thread"])
+@pytest.mark.parametrize("expired", [False, True], ids=["restart", "expiry"])
+async def test_thread_first_followup_after_state_loss(monkeypatch, tmp_path, research, expired):
+    get_turn_log = gw._get_turn_log
+    _, sessions = _wire(monkeypatch)
+    monkeypatch.setattr(gw, "_get_turn_log", get_turn_log)
+    monkeypatch.setattr(gw, "_turn_log", None)
+    monkeypatch.setenv("DISCORD_LOG_PATH", str(tmp_path / "turns.db"))
+    api = gw._api
+
+    async def with_channel_type(method, path, body=None):
+        if method == "GET" and path == "/channels/thread-1":
+            return {"id": "thread-1", "type": 11}
+        return await api(method, path, body)
+
+    monkeypatch.setattr(gw, "_api", with_channel_type)
+    if research:
+        await gw._handle_reaction(_reaction(), "bot")
+    else:
+        await _post_and_flush(_msg("chan-1", "alice", "<@bot> topic", mentions=("bot",)))
+    original_session = sessions[0][1]
+    if expired:
+        entry = gw._conversations._conversations["thread:thread-1"]
+        entry.last_activity -= entry.timeout_s + 1
+        gw._conversations._sweep_once()
+    else:
+        monkeypatch.setattr(gw, "_conversations", ConversationManager())
+        monkeypatch.setattr(gw, "_turn_log", None)
+    assert not gw._conversations.has_thread("thread-1")
+
+    await _post_and_flush(_msg("thread-1", "bob", "continue", message_id="m2"))
+    assert sessions[-1][1] == original_session
+    assert gw._conversations.has_thread("thread-1")
+    assert not gw._conversations.has("thread-1", "bob")
+
+
+async def test_research_reaction_restores_aliased_session(monkeypatch, tmp_path):
+    from discord.turn_log import TurnLog
+
+    get_turn_log = gw._get_turn_log
+    _, sessions = _wire(monkeypatch)
+    monkeypatch.setattr(gw, "_get_turn_log", get_turn_log)
+    monkeypatch.setattr(gw, "_turn_log", None)
+    monkeypatch.setenv("DISCORD_LOG_PATH", str(tmp_path / "turns.db"))
+    persisted = TurnLog()
+    persisted.record_user_turn("chan-1", "alice", "topic", conversation_id="saved", ts_ms=1)
+    persisted.record_assistant_turn("thread-1", "alice", "reply", conversation_id="saved", ts_ms=2)
+
+    await gw._handle_reaction(_reaction(), "bot")
+    await _post_and_flush(_msg("thread-1", "bob", "continue"))
+    assert [session for _, session in sessions] == ["discord-channel-chan-1:saved"] * 2
+
+
+async def test_unknown_thread_requires_mention(monkeypatch, tmp_path):
+    get_turn_log = gw._get_turn_log
+    _, sessions = _wire(monkeypatch)
+    monkeypatch.setattr(gw, "_get_turn_log", get_turn_log)
+    monkeypatch.setattr(gw, "_turn_log", None)
+    monkeypatch.setenv("DISCORD_LOG_PATH", str(tmp_path / "turns.db"))
+
+    await gw._handle_message(_msg("thread-unknown", "alice", "hello"), "bot")
+    assert not gw._message_buffers
+    assert not sessions
+    assert not gw._conversations.has_thread("thread-unknown")
+
+    await _post_and_flush(_msg("thread-unknown", "alice", "<@bot> hello", mentions=("bot",)))
+    assert len(sessions) == 1
+    assert sessions[0][1].startswith("discord-channel-thread-unknown:")
+    assert gw._conversations.has("thread-unknown", "alice")
