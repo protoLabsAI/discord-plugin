@@ -248,6 +248,9 @@ def _get_turn_log():
             from .turn_log import TurnLog
 
             _turn_log = TurnLog()
+            # Let thread conversations rejoin their logged session after an
+            # expiry/restart miss (ADR 0131 P2) — restore is a no-op until wired.
+            _conversations.set_turn_log(_turn_log)
         except Exception:  # noqa: BLE001
             log.exception("[discord] turn-log init failed — long-window context disabled")
             _turn_log = False

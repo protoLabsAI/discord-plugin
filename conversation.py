@@ -29,6 +29,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 log = logging.getLogger("protoagent.discord.conversation")
 
@@ -56,10 +57,20 @@ class ConversationManager:
     A periodic sweep (every ``sweep_interval_s``) drops expired conversations.
     """
 
-    def __init__(self, sweep_interval_s: float = 30.0):
+    def __init__(self, sweep_interval_s: float = 30.0, *, turn_log: Any = None):
         self._conversations: dict[str, ConversationEntry] = {}
         self._sweep_interval_s = sweep_interval_s
         self._sweep_task: asyncio.Task | None = None
+        # Optional durable turn log (duck-typed: needs ``thread_conversation``).
+        # Lets a thread rejoin its old conversation after expiry/restart. None
+        # keeps the original mint-on-miss behaviour unchanged.
+        self._turn_log = turn_log
+
+    def set_turn_log(self, turn_log: Any) -> None:
+        """Wire the turn log used to restore a thread's conversation on a miss
+        (the gateway builds its ``TurnLog`` lazily, so it attaches it here). With
+        no turn log, ``get_or_create_thread`` mints a fresh id on a miss as before."""
+        self._turn_log = turn_log
 
     def start(self) -> None:
         """Start the periodic sweep. Idempotent."""
@@ -125,7 +136,9 @@ class ConversationManager:
     def get_or_create_thread(self, thread_id: str, *, timeout_s: float = 300.0) -> tuple[str, bool, int]:
         """Thread-keyed twin of ``get_or_create`` — no user in the key, so any
         participant continues the conversation. Finds an ``alias_thread`` entry
-        when one exists; otherwise starts a thread-native conversation (🔬)."""
+        when one exists; otherwise, on a miss, rejoins the thread's prior
+        conversation from the durable turn log (survives expiry/restart) before
+        falling back to a thread-native conversation (🔬) with a fresh id."""
         key = self._thread_key(thread_id)
         now = time.monotonic()
         existing = self._conversations.get(key)
@@ -134,10 +147,17 @@ class ConversationManager:
             existing.turn_number += 1
             return existing.conversation_id, False, existing.turn_number
 
-        conversation_id = str(uuid.uuid4())
+        # Miss: before minting, try to reuse the thread's logged conversation_id
+        # so the swept/restarted thread keeps its LangGraph session (and history).
+        restored = self.restore_thread(thread_id)
+        if restored is not None:
+            conversation_id, origin_channel = restored
+        else:
+            conversation_id = str(uuid.uuid4())
+            origin_channel = thread_id
         self._conversations[key] = ConversationEntry(
             conversation_id=conversation_id,
-            channel_id=thread_id,
+            channel_id=origin_channel,  # origin channel for an aliased thread; the thread itself otherwise
             user_id="",  # shared space — no single owner
             started_at=now,
             last_activity=now,
@@ -145,6 +165,21 @@ class ConversationManager:
             turn_number=1,
         )
         return conversation_id, True, 1
+
+    def restore_thread(self, thread_id: str) -> tuple[str, str] | None:
+        """Look up a thread's prior conversation in the durable turn log:
+        ``(conversation_id, origin_channel)`` when the thread has logged turns,
+        else None. Called by ``get_or_create_thread`` on a miss so a thread that
+        was swept (expiry) or lost to a restart rejoins its old conversation
+        instead of minting a new id (ADR 0131 P2). A lookup failure degrades to
+        None (mint a fresh id) rather than dropping the turn."""
+        if self._turn_log is None:
+            return None
+        try:
+            return self._turn_log.thread_conversation(thread_id)
+        except Exception:
+            log.exception("[conversation] thread restore lookup failed for %s", thread_id)
+            return None
 
     def has_thread(self, thread_id: str) -> bool:
         entry = self._conversations.get(self._thread_key(thread_id))
