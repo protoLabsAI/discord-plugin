@@ -474,7 +474,15 @@ async def _handle_message(d: dict, bot_id: str) -> None:
     has_active_buffer = buffer_key in _message_buffers
     # Inside a tracked thread (auto-thread alias or 🔬 research thread) the
     # message arrives with channel_id == thread_id; any participant continues.
-    is_thread_convo = not is_dm and not is_peer_channel and _conversations.has_thread(channel_id)
+    is_thread_convo = False
+    if not is_dm and not is_peer_channel:
+        _get_turn_log()  # Attach durable history before the first restore lookup.
+        is_thread_convo = _conversations.has_thread(channel_id)
+        if not is_thread_convo and _conversations.restore_thread(channel_id) is not None:
+            # Ordinary guild channels also have logged turns. Verify this is
+            # a thread; origin metadata must not bypass the admin check below.
+            channel = await _api("GET", f"/channels/{channel_id}")
+            is_thread_convo = isinstance(channel, dict) and channel.get("type") in (10, 11, 12)
 
     # Guild messages need a mention, an active conversation (direct, thread
     # alias, or the channel-wide peer conversation), or an in-progress burst;
@@ -827,6 +835,7 @@ async def _handle_reaction(d: dict, bot_id: str) -> None:
     log.info("[discord] 🔬 research thread %s on message %s (by %s)", thread_id, message_id, user_id)
     _emit("discord.research_thread", {"channel_id": channel_id, "thread_id": thread_id, "user_id": user_id})
 
+    _get_turn_log()  # Restore before selecting a research-thread session too.
     # Live conversation keyed by the thread — follow-ups posted inside it flow
     # through the normal MESSAGE_CREATE path via the thread gate.
     conversation_id, _is_new, _turn = _conversations.get_or_create_thread(
