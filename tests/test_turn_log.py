@@ -81,3 +81,41 @@ def test_gateway_gets_a_working_turn_log(monkeypatch, tmp_path):
         "the gateway disabled its turn log — long-window context is off; "
         "check the logged '[discord] turn-log init failed' reason"
     )
+
+
+def test_thread_conversation_returns_conversation_and_origin(turn_log_mod, tmp_path):
+    """A thread rejoins its logged conversation: thread_conversation returns the
+    conversation_id its turns carry and the origin (pre-thread) channel — the
+    earliest row sharing that conversation_id."""
+    log = turn_log_mod.TurnLog(tmp_path / "turns.db")
+    conv = "conv-abc"
+    # Pre-thread turns in the origin channel …
+    log.record_user_turn("chan-1", "alice", "let's dig into this", conversation_id=conv, ts_ms=1000)
+    log.record_assistant_turn("chan-1", "alice", "on it", conversation_id=conv, ts_ms=2000)
+    # … then a follow-up inside the auto-thread (channel_id == thread_id).
+    log.record_user_turn("thread-1", "alice", "and another thing", conversation_id=conv, ts_ms=3000)
+
+    assert log.thread_conversation("thread-1") == (conv, "chan-1")
+
+
+def test_thread_conversation_native_thread_origin_is_itself(turn_log_mod, tmp_path):
+    """A 🔬 research thread has no channel ancestor — the origin is the thread."""
+    log = turn_log_mod.TurnLog(tmp_path / "turns.db")
+    log.record_user_turn("thread-9", "alice", "research this", conversation_id="conv-9", ts_ms=1000)
+    log.record_assistant_turn("thread-9", "alice", "findings…", conversation_id="conv-9", ts_ms=2000)
+
+    assert log.thread_conversation("thread-9") == ("conv-9", "thread-9")
+
+
+def test_thread_conversation_unknown_thread_is_none(turn_log_mod, tmp_path):
+    """No logged turns for the thread → None, so the caller mints a fresh id."""
+    log = turn_log_mod.TurnLog(tmp_path / "turns.db")
+    assert log.thread_conversation("thread-nope") is None
+
+
+def test_thread_conversation_ignores_rows_without_conversation_id(turn_log_mod, tmp_path):
+    """Legacy turns logged before conversation tagging (NULL conversation_id)
+    don't masquerade as a restorable conversation."""
+    log = turn_log_mod.TurnLog(tmp_path / "turns.db")
+    log.record_user_turn("thread-7", "alice", "untagged", conversation_id=None, ts_ms=1000)
+    assert log.thread_conversation("thread-7") is None

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 import discord.gateway as gw
 from discord.conversation import ConversationManager
 
@@ -228,3 +230,73 @@ async def test_only_a_configured_admin_dm_sets_the_return_address(monkeypatch):
     assert recorded == []
     await gw._handle_message(_dm("op", message_id="dm3"), "bot")
     assert recorded == ["dm-op"]
+
+
+@pytest.mark.parametrize("expired", [False, True], ids=["restart", "expiry"])
+@pytest.mark.parametrize("origin", ["chan-1", "thread-1"])
+async def test_durable_thread_followup_restores_session(monkeypatch, tmp_path, expired, origin):
+    from discord.turn_log import TurnLog
+
+    get_turn_log = gw._get_turn_log
+    _, sessions = _wire(monkeypatch)
+    monkeypatch.setattr(gw, "_get_turn_log", get_turn_log)
+    monkeypatch.setattr(gw, "_turn_log", None)
+    monkeypatch.setenv("DISCORD_LOG_PATH", str(tmp_path / "turns.db"))
+    persisted = TurnLog()
+    persisted.record_user_turn(origin, "alice", "topic", conversation_id="saved", ts_ms=1)
+    persisted.record_user_turn("thread-1", "alice", "followup", conversation_id="saved", ts_ms=2)
+    if expired:
+        gw._conversations.get_or_create_thread("thread-1", timeout_s=-1)
+        gw._conversations._sweep_once()
+    assert not gw._conversations.has_thread("thread-1")
+    assert gw._conversations._turn_log is None
+    api = gw._api
+
+    async def with_channel_type(method, path, body=None):
+        if method == "GET" and path == "/channels/thread-1":
+            return {"id": "thread-1", "type": 11}
+        return await api(method, path, body)
+
+    monkeypatch.setattr(gw, "_api", with_channel_type)
+    await _post_and_flush(_msg("thread-1", "bob", "continue"))
+    assert sessions[0][1] == f"discord-channel-{origin}:saved"
+    assert gw._conversations.thread_origin("thread-1") == origin
+
+
+@pytest.mark.parametrize("channel_type", [0, None, 11])
+async def test_durable_history_preserves_message_gates(monkeypatch, tmp_path, channel_type):
+    from discord.turn_log import TurnLog
+
+    get_turn_log = gw._get_turn_log
+    _, sessions = _wire(monkeypatch)
+    monkeypatch.setattr(gw, "_get_turn_log", get_turn_log)
+    monkeypatch.setattr(gw, "_turn_log", None)
+    monkeypatch.setenv("DISCORD_LOG_PATH", str(tmp_path / "turns.db"))
+    TurnLog().record_user_turn("channel", "alice", "topic", conversation_id="saved")
+    if channel_type == 11:
+        monkeypatch.setattr(gw, "_cfg_admin_ids", {"alice"})
+
+    async def channel_lookup(*args, **kwargs):
+        return {"type": channel_type} if channel_type is not None else None
+
+    monkeypatch.setattr(gw, "_api", channel_lookup)
+    await gw._handle_message(_msg("channel", "bob", "continue"), "bot")
+    assert not gw._message_buffers
+    assert not sessions
+
+
+async def test_turn_log_init_failure_preserves_mentioned_message(monkeypatch):
+    import discord.turn_log as turn_log
+
+    get_turn_log = gw._get_turn_log
+    _, sessions = _wire(monkeypatch)
+    monkeypatch.setattr(gw, "_get_turn_log", get_turn_log)
+    monkeypatch.setattr(gw, "_turn_log", None)
+
+    def unavailable():
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(turn_log, "TurnLog", unavailable)
+    await _post_and_flush(_msg("chan-1", "alice", "<@bot> hello", mentions=("bot",)))
+    assert len(sessions) == 1
+    assert gw._turn_log is False

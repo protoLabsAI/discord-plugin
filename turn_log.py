@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS discord_turns (
 
 CREATE INDEX IF NOT EXISTS idx_discord_turns_lookup
   ON discord_turns(channel_id, user_id, ts DESC);
+
+CREATE INDEX IF NOT EXISTS idx_discord_turns_conversation
+  ON discord_turns(conversation_id, ts);
 """
 
 
@@ -150,6 +153,44 @@ class TurnLog:
             )
             for r in reversed(rows)
         ]
+
+    def thread_conversation(self, thread_id) -> tuple[str, str] | None:
+        """The conversation a thread's logged turns belong to:
+        ``(conversation_id, origin_channel)``, or None when the thread has no
+        logged turn carrying a conversation_id.
+
+        Thread turns are logged with ``channel_id == thread_id`` (both the
+        auto-thread follow-ups and 🔬 research-thread turns), so the thread's
+        conversation_id is read from its most recent such turn. The origin
+        channel is the earliest row sharing that conversation_id — the pre-thread
+        channel for an aliased auto-thread, or the thread itself for a
+        thread-native conversation. Lets a swept/restarted thread rejoin its old
+        conversation instead of minting a fresh session (ADR 0131 P2)."""
+        try:
+            db = self._connect()
+            row = db.execute(
+                "SELECT conversation_id FROM discord_turns "
+                "WHERE channel_id = ? AND conversation_id IS NOT NULL "
+                # tie-break by id (insertion order) so same-millisecond turns stay
+                # deterministic — bursts often land in the same ms.
+                "ORDER BY ts DESC, id DESC LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+            if row is None:
+                db.close()
+                return None
+            conversation_id = row["conversation_id"]
+            origin = db.execute(
+                "SELECT channel_id FROM discord_turns WHERE conversation_id = ? ORDER BY ts, id LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+            db.close()
+        except sqlite3.DatabaseError:
+            log.exception("[discord-log] thread_conversation query failed (%s)", thread_id)
+            return None
+
+        origin_channel = origin["channel_id"] if origin is not None else thread_id
+        return conversation_id, origin_channel
 
     def prune_older_than(self, max_age_days: int) -> int:
         """Delete turns older than ``max_age_days``; returns rows removed. Best-effort."""
