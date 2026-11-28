@@ -399,11 +399,20 @@ async def _deliver_event(evt: dict) -> bool:
     """Forward a reactive Activity-thread message to the operator's Discord DM.
 
     Returns True if delivered. Live Discord replies use per-conversation contexts
-    (not ``system:activity``), so only scheduler/inbox/proactive output publishes
-    ``activity.message`` — there's no double-post of the gateway's own replies."""
+    (not ``system:activity``), so they never publish ``activity.message`` and there's
+    no double-post of the gateway's own replies.
+
+    A peer turn (``origin == "a2a"``: another agent, or the operator's ``@agent`` from
+    the hub console) is skipped. Core puts it on the Activity feed (ADR 0129), but its
+    answer already goes back to whoever sent it, so a DM copy reads as the agent
+    answering in the wrong place. Scheduler, inbox, webhook and proactive output still
+    has nowhere else to go, so it is still delivered."""
     if evt.get("event") != "activity.message":
         return False
-    text = ((evt.get("data") or {}).get("text") or "").strip()
+    data = evt.get("data") or {}
+    if data.get("origin") == "a2a":
+        return False
+    text = (data.get("text") or "").strip()
     if not text:
         return False
     channel_id = return_address.get()
