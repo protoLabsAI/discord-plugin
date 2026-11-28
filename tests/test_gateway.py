@@ -371,3 +371,34 @@ async def test_unknown_thread_requires_mention(monkeypatch, tmp_path):
     assert len(sessions) == 1
     assert sessions[0][1].startswith("discord-channel-thread-unknown:")
     assert gw._conversations.has("thread-unknown", "alice")
+
+
+# ── return-address delivery: peer turns stay with their caller ───────────────
+
+
+def _deliveries(monkeypatch):
+    sent: list[tuple[str, str]] = []
+
+    async def _fake_reply(channel_id, message_id, content, *, is_dm=False):
+        sent.append((channel_id, content))
+        return None
+
+    monkeypatch.setattr(gw, "_reply", _fake_reply)
+    monkeypatch.setattr(gw.return_address, "get", lambda: "dm-1")
+    return sent
+
+
+def test_scheduled_activity_output_reaches_the_operator_dm(monkeypatch):
+    sent = _deliveries(monkeypatch)
+    evt = {"event": "activity.message", "data": {"text": "VERDICT: BLOCK", "origin": "scheduler"}}
+    assert asyncio.run(gw._deliver_event(evt)) is True
+    assert sent == [("dm-1", "VERDICT: BLOCK")]
+
+
+def test_peer_turn_is_not_copied_to_the_operator_dm(monkeypatch):
+    """An @frank from the hub console (origin a2a) answers the hub; a DM copy made it
+    look like Frank replied on Discord."""
+    sent = _deliveries(monkeypatch)
+    evt = {"event": "activity.message", "data": {"text": "Got it.", "origin": "a2a", "trigger": "delegate_to"}}
+    assert asyncio.run(gw._deliver_event(evt)) is False
+    assert sent == []
